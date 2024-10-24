@@ -4,3 +4,4 @@
 yolo_models/*
 !yolo_models/.gitkeep
 /training/**
+/testing
