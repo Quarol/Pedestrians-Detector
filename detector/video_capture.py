@@ -15,6 +15,9 @@ class VideoCapture:
         self.end_capture()
         self._video_capture = cv.VideoCapture(source)
 
+        self._video_capture.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
+        self._video_capture.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
+
 
     def end_capture(self) -> None:
         if self._video_capture is None:

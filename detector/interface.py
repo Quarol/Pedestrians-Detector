@@ -14,15 +14,15 @@ VIDEO_FRAME_MARGIN = 10
 AFTER_DELAY = 1
 
 class GUI:
-    def __init__(self, parent_app: App, frame_display_scaling_factor : float = 1.0) -> None:
-        self._parent_app = parent_app
+    def __init__(self, video_stream: App, frame_display_scaling_factor : float = 1.0) -> None:
+        self._video_stream = video_stream
 
         # Initializing screen resolution (for window size)
         screen = ImageGrab.grab()
         screen_width, screen_height = screen.size
         screen_width = int(frame_display_scaling_factor * screen_width)
         screen_height = int(frame_display_scaling_factor * screen_height)
-        self._parent_app.set_frame_area_dimensions(screen_width, screen_height)
+        self._video_stream.set_frame_area_dimensions(screen_width, screen_height)
 
         self._selected_video_source_id = None
         self._initialize_settings_gui()
@@ -58,7 +58,7 @@ class GUI:
         self._source_menu = tk.Menu(master=self._menubar, tearoff=0)
         self._selected_video_source_id = tk.IntVar()
 
-        sources = self._parent_app.get_available_sources()
+        sources = self._video_stream.get_available_sources()
         for source_name in sources:
             self._source_menu.add_radiobutton(
                 label=source_name,
@@ -72,19 +72,18 @@ class GUI:
 
 
     def _on_video_source_select(self, source_id: int):
-        is_source_on = self._parent_app.set_video_source(source_id)
+        is_source_on = self._video_stream.set_video_source(source_id)
         self._selected_video_source_id.set(source_id)
 
         if is_source_on:
-            self._is_displaying = True
-            self._update_frame()
+            self._start_displaying()
         else:
             self._stop_displaying()
 
 
     def _start_displaying(self):
         self._is_displaying = True
-        self._update_frame()
+        self._root.after(AFTER_DELAY, self._update_frame)
 
 
     def _stop_displaying(self):
@@ -108,7 +107,7 @@ class GUI:
             orient='horizontal',
             command=self._update_confidence_threshold
         )
-        confidence_threshold_slider.set(self._parent_app.get_confidence_threshold())
+        confidence_threshold_slider.set(self._video_stream.get_confidence_threshold())
         confidence_threshold_slider.pack(pady=10)
 
         # Add object class selection
@@ -130,8 +129,8 @@ class GUI:
         row = 0
         col = 0
         max_items_per_row = 4
-        all_classes = self._parent_app.get_available_classes()
-        detected_classes = self._parent_app.get_detected_classes()
+        all_classes = self._video_stream.get_available_classes()
+        detected_classes = self._video_stream.get_detected_classes()
 
         for index, class_name in enumerate(all_classes):
             var = tk.BooleanVar(value=(index in detected_classes))
@@ -172,14 +171,14 @@ class GUI:
         
 
     def _update_confidence_threshold(self, value):
-        self._parent_app.set_confidence_threshold(float(value))
+        self._video_stream.set_confidence_threshold(float(value))
 
 
     def _update_classes(self, class_index, var):
         if var.get():
-            self._parent_app.add_detected_class(class_index)
+            self._video_stream.add_detected_class(class_index)
         else:
-            self._parent_app.remove_detected_class(class_index)
+            self._video_stream.remove_detected_class(class_index)
 
 
     def select_video_file(self) -> str:
@@ -192,6 +191,16 @@ class GUI:
 
 
     def show(self) -> None:
+        self.MAX_FRAME = 5001
+        self.CURRENT_FRAME = 0
+        self.START_TOTAL_TIME = None
+        self.END_TIME = None
+        self.TOTAL_TIME_FILE = open('overall_time.txt', 'w')
+
+        self.START_SINGLE_FRAME_TIME = None
+        self.SINGLE_FRAME_TIMES_FILE = open('durations.txt', 'w')
+        self.SINGLE_FRAME_TIMES_FILE.write('Time [s]\n')
+
         self._root.mainloop()
 
 
@@ -205,27 +214,52 @@ class GUI:
         if not self._is_displaying:
             cv.destroyAllWindows()
             return
+        
+        # 1) Pobór klatki obrazu z bufora
+        is_capture_on, frame = self._video_stream.get_latest_frame()
 
-        is_capture_on, frame = self._parent_app.get_latest_frame()
-
+        # 2) Kod do wykonania kiedy kamera jest wlaczona:
         if is_capture_on:
             if self._time_before_frame is None:
                 self._time_before_frame = Timer.get_current_time()
 
+            # 3) Kod do wykonania gdy bufor nie byl pusty (None):
             if frame is not None:
                 self._show_frame(frame)
                 self._frame_counter += 1
+
+                # 4) Poczatek pomiaru: po pobraniu klatki 0 - nie wchodzacej do pomiarow
+                if self.CURRENT_FRAME == 0:
+                    self.START_SINGLE_FRAME_TIME = Timer.get_current_time()
+                    self.START_TOTAL_TIME = self.START_SINGLE_FRAME_TIME
+
+                if self.CURRENT_FRAME > 0 and self.CURRENT_FRAME <= self.MAX_FRAME:
+                    INTERVAL_END = Timer.get_current_time()
+                    periodic_duration = INTERVAL_END - self.START_SINGLE_FRAME_TIME
+                    self.START_SINGLE_FRAME_TIME = INTERVAL_END
+                    self.SINGLE_FRAME_TIMES_FILE.write(f'{periodic_duration}\n')
+
+                if self.CURRENT_FRAME == self.MAX_FRAME:
+                    self.END_TIME = Timer.get_current_time()
+                    duration = self.END_TIME - self.START_TOTAL_TIME
+                    periodic_duration = self.END_TIME - self.START_SINGLE_FRAME_TIME
+                    self.TOTAL_TIME_FILE.write(f'{duration}')
+                    self.TOTAL_TIME_FILE.close()
+                    self.SINGLE_FRAME_TIMES_FILE.write(f'{periodic_duration}')
+                    self.SINGLE_FRAME_TIMES_FILE.close()
+
+                self.CURRENT_FRAME += 1
         else:
             self._time_before_frame = None
-            self._parent_app.set_video_source(NO_VIDEO)
+            self._video_stream.set_video_source(NO_VIDEO)
             self._selected_video_source_id.set(NO_VIDEO)
             self._stop_displaying()
 
-        self._count_and_update_fps(is_capture_on)
+        self._update_fps_label(is_capture_on)
         self._root.after(AFTER_DELAY, self._update_frame)
     
 
-    def _count_and_update_fps(self, is_capture_on) -> None:
+    def _update_fps_label(self, is_capture_on) -> None:
         if self._time_before_frame is None:
             return
 
